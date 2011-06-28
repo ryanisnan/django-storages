@@ -13,7 +13,7 @@ from django.core.exceptions import ImproperlyConfigured, SuspiciousOperation
 from django.utils.encoding import force_unicode, smart_str
 
 try:
-    from boto.s3.connection import S3Connection
+    from boto.s3.connection import S3Connection, SubdomainCallingFormat
     from boto.exception import S3ResponseError
     from boto.s3.key import Key
 except ImportError:
@@ -24,7 +24,7 @@ ACCESS_KEY_NAME     = getattr(settings, 'AWS_ACCESS_KEY_ID', None)
 SECRET_KEY_NAME     = getattr(settings, 'AWS_SECRET_ACCESS_KEY', None)
 HEADERS             = getattr(settings, 'AWS_HEADERS', {})
 STORAGE_BUCKET_NAME = getattr(settings, 'AWS_STORAGE_BUCKET_NAME', None)
-AUTO_CREATE_BUCKET  = getattr(settings, 'AWS_AUTO_CREATE_BUCKET', True)
+AUTO_CREATE_BUCKET  = getattr(settings, 'AWS_AUTO_CREATE_BUCKET', False)
 DEFAULT_ACL         = getattr(settings, 'AWS_DEFAULT_ACL', 'public-read')
 BUCKET_ACL          = getattr(settings, 'AWS_BUCKET_ACL', DEFAULT_ACL)
 QUERYSTRING_AUTH    = getattr(settings, 'AWS_QUERYSTRING_AUTH', True)
@@ -32,6 +32,7 @@ QUERYSTRING_EXPIRE  = getattr(settings, 'AWS_QUERYSTRING_EXPIRE', 3600)
 REDUCED_REDUNDANCY  = getattr(settings, 'AWS_REDUCED_REDUNDANCY', False)
 LOCATION            = getattr(settings, 'AWS_LOCATION', '')
 CUSTOM_DOMAIN       = getattr(settings, 'AWS_S3_CUSTOM_DOMAIN', None)
+CALLING_FORMAT      = getattr(settings, 'AWS_S3_CALLING_FORMAT', SubdomainCallingFormat())
 SECURE_URLS         = getattr(settings, 'AWS_S3_SECURE_URLS', True)
 FILE_NAME_CHARSET   = getattr(settings, 'AWS_S3_FILE_NAME_CHARSET', 'utf-8')
 FILE_OVERWRITE      = getattr(settings, 'AWS_S3_FILE_OVERWRITE', True)
@@ -82,7 +83,7 @@ class S3BotoStorage(Storage):
                        reduced_redundancy=REDUCED_REDUNDANCY,
                        custom_domain=CUSTOM_DOMAIN, secure_urls=SECURE_URLS,
                        location=LOCATION, file_name_charset=FILE_NAME_CHARSET,
-                       preload_metadata=PRELOAD_METADATA):
+                       preload_metadata=PRELOAD_METADATA, calling_format=CALLING_FORMAT):
         self.bucket_acl = bucket_acl
         self.bucket_name = bucket
         self.acl = acl
@@ -102,7 +103,7 @@ class S3BotoStorage(Storage):
         if not access_key and not secret_key:
              access_key, secret_key = self._get_access_keys()
         
-        self.connection = S3Connection(access_key, secret_key)
+        self.connection = S3Connection(access_key, secret_key, calling_format=calling_format)
         self._entries = {}
 
     @property
@@ -134,7 +135,7 @@ class S3BotoStorage(Storage):
     def _get_or_create_bucket(self, name):
         """Retrieves a bucket if it exists, otherwise creates it."""
         try:
-            return self.connection.get_bucket(name)
+            return self.connection.get_bucket(name, validate=AUTO_CREATE_BUCKET)
         except S3ResponseError, e:
             if AUTO_CREATE_BUCKET:
                 bucket = self.connection.create_bucket(name)
