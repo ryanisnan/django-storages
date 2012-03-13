@@ -11,6 +11,7 @@ from django.core.files.storage import FileSystemStorage
 from storages.backends import s3boto
 
 __all__ = (
+    'SafeJoinTest',
     'S3BotoStorageTests',
     #'S3BotoStorageFileTests',
 )
@@ -19,6 +20,21 @@ class S3BotoTestCase(TestCase):
     @mock.patch('storages.backends.s3boto.S3Connection')
     def setUp(self, S3Connection):
         self.storage = s3boto.S3BotoStorage()
+
+
+class SafeJoinTest(TestCase):
+    def test_normal(self):
+        path = s3boto.safe_join("", "path/to/somewhere", "other", "path/to/somewhere")
+        self.assertEquals(path, "path/to/somewhere/other/path/to/somewhere")
+
+    def test_with_dot(self):
+        path = s3boto.safe_join("", "path/./somewhere/../other", "..",
+                                ".", "to/./somewhere")
+        self.assertEquals(path, "path/to/somewhere")
+
+    def test_suspicious_operation(self):
+        self.assertRaises(ValueError,
+            s3boto.safe_join, "base", "../../../../../../../etc/passwd")
     
 class S3BotoStorageTests(S3BotoTestCase):
 

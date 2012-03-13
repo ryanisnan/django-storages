@@ -69,9 +69,13 @@ def safe_join(base, *paths):
     """
     from urlparse import urljoin
     base_path = force_unicode(base)
-    paths = map(lambda p: force_unicode(p), paths)
-    final_path = urljoin(base_path +
-        ("/" if not base_path.endswith("/") else ""), *paths)
+    base_path = base_path.rstrip('/')
+    paths = [force_unicode(p) for p in paths]
+
+    final_path = base_path
+    for path in paths:
+        final_path = urljoin(final_path.rstrip('/') + "/", path.rstrip("/"))
+
     # Ensure final_path starts with base_path and that the next character after
     # the final path is '/' (or nothing, in which case final_path must be
     # equal to base_path).
@@ -80,7 +84,8 @@ def safe_join(base, *paths):
        or final_path[base_path_len:base_path_len + 1] not in ('', '/'):
         raise ValueError('the joined path is located outside of the base path'
                          ' component')
-    return final_path
+
+    return final_path.lstrip('/')
 
 # Dates returned from S3's API look something like this:
 # "Sun, 11 Mar 2012 17:01:41 GMT"
@@ -226,7 +231,7 @@ class S3BotoStorage(Storage):
         the directory specified by the LOCATION setting.
         """
         try:
-            return safe_join(self.location, name).lstrip('/')
+            return safe_join(self.location, name)
         except ValueError:
             raise SuspiciousOperation("Attempted access to '%s' denied." %
                                       name)
