@@ -1,9 +1,5 @@
 import os
-import re
-import time
 import mimetypes
-import calendar
-from datetime import datetime
 
 try:
     from cStringIO import StringIO
@@ -87,41 +83,11 @@ def safe_join(base, *paths):
 
     return final_path.lstrip('/')
 
-# Dates returned from S3's API look something like this:
-# "Sun, 11 Mar 2012 17:01:41 GMT"
-MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-               'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-DATESTR_RE = re.compile(r"^.+, (?P<day>\d{1,2}) (?P<month_name>%s) (?P<year>\d{4}) (?P<hour>\d{1,2}):(?P<minute>\d{1,2}):(?P<second>\d{1,2}) (GMT|UTC)$" % ("|".join(MONTH_NAMES)))
-def _parse_datestring(dstr):
-    """
-    Parse a simple datestring returned by the S3 API and returns
-    a datetime object in the local timezone.
-    """
-    # This regular expression and thus this function
-    # assumes the date is GMT/UTC
-    m = DATESTR_RE.match(dstr)
-    if m:
-        # This code could raise a ValueError if there is some
-        # bad data or the date is invalid.
-        datedict = m.groupdict()
-        utc_datetime = datetime(
-            int(datedict['year']),
-            int(MONTH_NAMES.index(datedict['month_name'])) + 1,
-            int(datedict['day']),
-            int(datedict['hour']),
-            int(datedict['minute']),
-            int(datedict['second']),
-        )
-
-        # Convert the UTC datetime object to local time.
-        return datetime(*time.localtime(calendar.timegm(utc_datetime.timetuple()))[:6])
-    else:
-        raise ValueError("Could not parse date string: " + dstr)
 
 class S3BotoStorage(Storage):
     """
     Amazon Simple Storage Service using Boto
-    
+
     This storage backend supports opening files in read or write
     mode and supports streaming(buffering) data in chunks to S3
     when writing.
@@ -186,7 +152,7 @@ class S3BotoStorage(Storage):
     def _get_access_keys(self):
         """
         Gets the access keys to use when accessing S3. If none
-        are provided to the class in the constructor or in the 
+        are provided to the class in the constructor or in the
         settings then get them from the environment variables.
         """
         access_key = ACCESS_KEY_NAME
@@ -246,9 +212,12 @@ class S3BotoStorage(Storage):
         """Gzip a given string content."""
         zbuf = StringIO()
         zfile = GzipFile(mode='wb', compresslevel=6, fileobj=zbuf)
-        zfile.write(content.read())
-        zfile.close()
+        try:
+            zfile.write(content.read())
+        finally:
+            zfile.close()
         content.file = zbuf
+        content.seek(0)
         return content
 
     def _open(self, name, mode='rb'):
@@ -325,13 +294,24 @@ class S3BotoStorage(Storage):
         return self.bucket.get_key(self._encode_name(name)).size
 
     def modified_time(self, name):
+        try:
+            from dateutil import parser, tz
+        except ImportError:
+            raise NotImplementedError()
         name = self._normalize_name(self._clean_name(name))
         entry = self.entries.get(name)
+        # only call self.bucket.get_key() if the key is not found
+        # in the preloaded metadata.
         if entry is None:
             entry = self.bucket.get_key(self._encode_name(name))
-
-        # Parse the last_modified string to a local datetime object.
-        return _parse_datestring(entry.last_modified)
+        # convert to string to date
+        last_modified_date = parser.parse(entry.last_modified)
+        # if the date has no timzone, assume UTC
+        if last_modified_date.tzinfo == None:
+            last_modified_date = last_modified_date.replace(tzinfo=tz.tzutc())
+        # convert date to local time w/o timezone
+        timezone = tz.gettz(settings.TIME_ZONE)
+        return last_modified_date.astimezone(timezone).replace(tzinfo=None)
 
     def url(self, name):
         name = self._normalize_name(self._clean_name(name))
@@ -353,7 +333,7 @@ class S3BotoStorage(Storage):
 class S3BotoStorageFile(File):
     """
     The default file object used by the S3BotoStorage backend.
-    
+
     This file implements file streaming using boto's multipart
     uploading functionality. The file can be opened in read or
     write mode.
@@ -368,7 +348,7 @@ class S3BotoStorageFile(File):
     in your application.
     """
     # TODO: Read/Write (rw) mode may be a bit undefined at the moment. Needs testing.
-    # TODO: When Django drops support for Python 2.5, rewrite to use the 
+    # TODO: When Django drops support for Python 2.5, rewrite to use the
     #       BufferedIO streams in the Python 2.6 io module.
 
     def __init__(self, name, mode, storage, buffer_size=FILE_BUFFER_SIZE):
@@ -383,7 +363,7 @@ class S3BotoStorageFile(File):
         self._multipart = None
         # 5 MB is the minimum part size (if there is more than one part).
         # Amazon allows up to 10,000 parts.  The default supports uploads
-        # up to roughly 50 GB.  Increase the part size to accommodate 
+        # up to roughly 50 GB.  Increase the part size to accommodate
         # for files larger than this.
         self._write_buffer_size = buffer_size
         self._write_counter = 0
@@ -392,15 +372,23 @@ class S3BotoStorageFile(File):
     def size(self):
         return self.key.size
 
-    @property
-    def file(self):
+    def _get_file(self):
         if self._file is None:
             self._file = StringIO()
             if 'r' in self._mode:
                 self._is_dirty = False
                 self.key.get_contents_to_file(self._file)
                 self._file.seek(0)
+            content_type = mimetypes.guess_type(self.name)[0] or Key.DefaultContentType
+            if (self._storage.gzip and
+                    content_type in self._storage.gzip_content_types):
+                self._file = GzipFile(mode=self._mode, fileobj=self._file)
         return self._file
+
+    def _set_file(self, value):
+        self._file = value
+
+    file = property(_get_file, _set_file)
 
     def read(self, *args, **kwargs):
         if 'r' not in self._mode:
@@ -419,8 +407,8 @@ class S3BotoStorageFile(File):
             upload_headers.update(self._storage.headers)
             self._multipart = self._storage.bucket.initiate_multipart_upload(
                 self.key.name,
-                headers = upload_headers,
-                reduced_redundancy = self._storage.reduced_redundancy
+                headers=upload_headers,
+                reduced_redundancy=self._storage.reduced_redundancy
             )
         if self._write_buffer_size <= self._buffer_file_size:
             self._flush_write_buffer()
@@ -429,7 +417,7 @@ class S3BotoStorageFile(File):
     @property
     def _buffer_file_size(self):
         pos = self.file.tell()
-        self.file.seek(0,os.SEEK_END)
+        self.file.seek(0, os.SEEK_END)
         length = self.file.tell()
         self.file.seek(pos)
         return length
