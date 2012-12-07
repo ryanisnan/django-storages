@@ -31,6 +31,7 @@ QUERYSTRING_AUTH = getattr(settings, 'AWS_QUERYSTRING_AUTH', True)
 QUERYSTRING_EXPIRE = getattr(settings, 'AWS_QUERYSTRING_EXPIRE', 3600)
 REDUCED_REDUNDANCY = getattr(settings, 'AWS_REDUCED_REDUNDANCY', False)
 LOCATION = getattr(settings, 'AWS_LOCATION', '')
+ENCRYPTION = getattr(settings, 'AWS_S3_ENCRYPTION', False)
 CUSTOM_DOMAIN = getattr(settings, 'AWS_S3_CUSTOM_DOMAIN', None)
 CALLING_FORMAT = getattr(settings, 'AWS_S3_CALLING_FORMAT',
                          SubdomainCallingFormat())
@@ -103,6 +104,7 @@ class S3BotoStorage(Storage):
             querystring_auth=QUERYSTRING_AUTH,
             querystring_expire=QUERYSTRING_EXPIRE,
             reduced_redundancy=REDUCED_REDUNDANCY,
+            encryption=ENCRYPTION,
             custom_domain=CUSTOM_DOMAIN,
             secure_urls=SECURE_URLS,
             location=LOCATION,
@@ -119,6 +121,7 @@ class S3BotoStorage(Storage):
         self.querystring_auth = querystring_auth
         self.querystring_expire = querystring_expire
         self.reduced_redundancy = reduced_redundancy
+        self.encryption = encryption
         self.custom_domain = custom_domain
         self.secure_urls = secure_urls
         self.location = location or ''
@@ -251,11 +254,14 @@ class S3BotoStorage(Storage):
         if self.preload_metadata:
             self._entries[encoded_name] = key
 
-
         key.set_metadata('Content-Type', content_type)
+        # only pass backwards incompatible arguments if they vary from the default
+        kwargs = {}
+        if self.encryption:
+            kwargs['encrypt_key'] = self.encryption
         key.set_contents_from_file(content, headers=headers, policy=self.acl,
                                  reduced_redundancy=self.reduced_redundancy,
-                                 rewind=True)
+                                 rewind=True, **kwargs)
         return cleaned_name
 
     def delete(self, name):
