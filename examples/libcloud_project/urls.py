@@ -1,4 +1,8 @@
-from django.conf.urls.defaults import patterns, include, url
+try:
+    from django.conf.urls import include, patterns, url
+except ImportError:  # deprecated since Django 1.4
+    from django.conf.urls.defaults import include, patterns, url
+
 
 # Uncomment the next two lines to enable the admin:
 # from django.contrib import admin

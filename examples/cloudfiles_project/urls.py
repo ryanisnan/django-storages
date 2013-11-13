@@ -1,6 +1,11 @@
-from django.conf.urls.defaults import *
 from django.conf import settings
 from photos.models import Photo
+
+try:
+    from django.conf.urls import include, patterns
+except ImportError:  # deprecated since Django 1.4
+    from django.conf.urls.defaults import include, patterns  # noqa
+
 
 photo_dict = {
     'queryset': Photo.objects.all()
